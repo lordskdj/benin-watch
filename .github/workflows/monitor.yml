@@ -1,0 +1,47 @@
+name: Benin Watch V1
+on:
+  schedule:
+    # V1 budget-friendly cadence. Not guaranteed to run exactly on time.
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+    inputs:
+      test_notification:
+        description: 'Envoyer un test ntfy uniquement ?'
+        type: boolean
+        default: false
+permissions:
+  contents: write
+concurrency:
+  group: benin-watch-v1
+  cancel-in-progress: false
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check site or test ntfy
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TEST_NOTIFICATION: ${{ inputs.test_notification }}
+        run: |
+          if [ "$TEST_NOTIFICATION" = "true" ]; then
+            python watcher.py --test
+          else
+            python watcher.py
+          fi
+      - name: Persist state
+        if: success() && inputs.test_notification != true
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add watcher_state.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore: update monitoring state [skip ci]'
+            git push
+          fi
