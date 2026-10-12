@@ -1,41 +1,45 @@
-# Bénin Watch V1 🇧🇯
+# Bénin Watch V1.1 🇧🇯
 
-Surveille **https://voyage.benin.bj/** par analyse de texte HTML côté serveur. **Aucune promesse de détection instantanée ni de places confirmées.**
+Surveille https://voyage.benin.bj/ **à partir du HTML visible côté serveur**, sans réserver de billet. Les changements de page sont des *indices*, pas une disponibilité confirmée.
 
-## Mise en place guidée
+## Mise à niveau depuis V1
 
-1. Créer un dépôt GitHub **privé** et ajouter `watcher.py` et `.github/workflows/monitor.yml` (conserver le chemin exact).
-2. Aller dans **Settings → Secrets and variables → Actions → New repository secret**. Ajouter `NTFY_TOPIC` avec le nom exact du sujet ntfy existant (pas son URL). Ne jamais afficher le sujet publiquement.
-3. Vérifier que les **Actions sont autorisées** et que le jeton `GITHUB_TOKEN` dispose de **Read and write permissions** dans Settings → Actions → General → Workflow permissions. Un réglage d'organisation peut primer.
-4. Dans **Actions → Benin Watch V1 → Run workflow**, cocher `test_notification` puis lancer. Vérifier la notification ntfy sur l'iPhone.
-5. Lancer de nouveau **sans** cocher `test_notification`. Vérifier les logs, le fichier `watcher_state.json` commité et la notification de rapport quotidien.
-6. Vérifier que les déclenchements automatiques apparaissent à `:07` et `:37` UTC (horaires approximatifs et non garantis).
+1. **Dans GitHub Desktop**, `Fetch origin` puis `Pull origin` si nécessaire, avant toute modification. Le workflow peut avoir créé des commits d'état.
+2. Remplacer `watcher.py`, `test_watcher.py` et `.github/workflows/monitor.yml` par les fichiers V1.1. Ajouter `.gitignore`. Aucun besoin de remplacer `watcher_state.json` : **conserver l'état existant**.
+3. Dans VS Code, ouvrir le dossier local `benin-watch` et éventuellement lancer `python -m unittest -v test_watcher.py`.
+4. Dans GitHub Desktop, vérifier les fichiers modifiés, committer `fix: resilient monitoring V1.1`, puis `Push origin`.
+5. Dans GitHub > Actions, sélectionner **Benin Watch V1.1**, lancer le workflow avec `test_notification: true`, vérifier le message sur iPhone.
+6. Relancer avec `test_notification: false`, vérifier les logs `[SITE]`, `[NTFY]`, `[QUEUE]`, le dernier état `watcher_state.json` et la notification quotidienne.
+7. Laisser le planning **30 minutes** pendant les tests, puis réévaluer la fréquence, les quotas GitHub, et le besoin d'un VPS.
 
-## Comportement
+## Résilience
 
-- Premier contrôle réussi : enregistre le contenu et envoie un rapport quotidien.
-- Chaque jour (fuseau Europe/Paris), **premier contrôle réussi** : un rapport ntfy. **L'absence de rapport signifie qu'il faut vérifier le bot** ; elle ne déclenche pas d'alerte autonome.
-- Changement d'état, texte modifié, indices de réservation : notification prioritaire, sans affirmer qu'une place est disponible.
-- Erreur réseau/HTTP : une alerte par incident ; le workflow sort en échec. Au prochain contrôle réussi, notification de reprise.
-- État commité uniquement après une exécution réussie. Un incident peut nécessiter une inspection des journaux et, si l'état n'a pas été persisté, des alertes répétées peuvent arriver.
+- HTTP 408/425/429/5xx transitoires ou erreurs réseau : 3 tentatives pour le site, 4 pour ntfy, avec délais bornés.
+- Avant chaque tentative de notification, l'alerte est **enregistrée** dans `watcher_state.json`. Elle n'est retirée qu'après la réponse HTTP 2xx de ntfy.
+- Le workflow commite l'état, même si la vérification échoue (sauf annulation). Le job reste **rouge** quand le site est inaccessible ou ntfy n'a pas accepté le message.
+- Alerte urgente prioritaire devant les rapports quotidiens dans la file.
+- Rapport journalier après un contrôle réussi ; en cas d'indisponibilité ntfy, seul le **dernier rapport** est gardé en attente.
+- Pas de commit à chaque scan identique : enregistrement lors d'un changement significatif/rapport quotidien/incident.
+- Les étapes de tests sont exécutées avant chaque contrôle du site.
+- Actions `checkout@v5` et `setup-python@v6` utilisent Node.js 24, compatible avec les runners récents hébergés par GitHub.
 
-## Limites importantes
+## Limites connues (à améliorer après validation)
 
-- **HTML seulement** : une interface JavaScript peut échapper au contrôle. Une V2 Playwright sera utile après inspection du site.
-- Le planning GitHub Actions peut être retardé, abandonné ou stoppé (quota/règles GitHub). **Pas adapté comme unique dispositif si les places partent en quelques minutes**.
-- Environ 1 440 exécutions/mois au rythme choisi ; les minutes facturées peuvent dépasser les quotas selon la durée des jobs et le plan GitHub. Surveiller Billing → Actions.
-- Un sujet public ntfy est connaissable par son nom ; utiliser un nom long et imprévisible. Ne pas transmettre de secrets ni de données personnelles dans les alertes.
-- Aucun contournement de CAPTCHA, file d'attente ou restrictions du site ; trafic modéré.
-- Le succès d'un appel ntfy garantit seulement que ntfy a accepté le message, **pas** que l'iPhone l'a affiché.
+- GitHub Actions peut retarder/omettre des exécutions : **ne garantit pas la détection instantanée**, surtout pour les billets à forte demande.
+- L'analyse du texte HTML **ne garantit pas** la détection des réservations si celles-ci sont gérées par JavaScript ou une API. Des changements non pertinents peuvent créer de fausses alertes.
+- Une notification acceptée par ntfy n'est pas une preuve de réception sur iOS. La file d'attente fournit une sémantique *au moins une fois*, donc quelques doublons restent possibles si GitHub échoue à pousser l'état après un envoi.
+- L'absence de rapport quotidien doit être contrôlée manuellement jusqu'à l'ajout d'un **monitoring externe indépendant**.
+- Si le dossier JSON est corrompu, une erreur fatale empêche le contrôle ; examiner les logs et restaurer un état valide (ne pas supprimer un état sans en discuter).
+- Éviter de surcharger le site, respecter ses restrictions, ne pas contourner CAPTCHA ou files d'attente.
 
-## Test local sans secret dans le dépôt
+## Sécurité
 
-Sous PowerShell :
+Définir `NTFY_TOPIC` exclusivement dans les **Actions secrets** de GitHub (nom exact du topic, pas l'URL). Préférer un nom long et imprévisible. Un topic ntfy.sh non protégé est accessible à quiconque connaît son nom. Ne pas mettre de secret dans `.env` commité.
 
-```powershell
-$env:NTFY_TOPIC="ton-topic-prive"
-python watcher.py --test
-python watcher.py
+## Exécuter les tests
+
+```bash
+python -m unittest -v test_watcher.py
 ```
 
-Ne commite jamais `watcher_state.json` avec des informations sensibles ; ce fichier contient uniquement l'état de la page et les dates.
+Les messages `HTTP 502` visibles dans certains tests sont **simulés** et n'indiquent pas une panne réelle.

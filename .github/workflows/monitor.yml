@@ -1,7 +1,7 @@
-name: Benin Watch V1
+name: Benin Watch V1.1
 on:
   schedule:
-    # V1 budget-friendly cadence. Not guaranteed to run exactly on time.
+    # 2 fois/heure, horaire non garanti. On garde ce rythme pour les tests.
     - cron: '7,37 * * * *'
   workflow_dispatch:
     inputs:
@@ -19,25 +19,38 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: true
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+
+      
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+
+      - name: Run unit tests
+        run: python -m unittest -v test_watcher.py
       - name: Check site or test ntfy
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           TEST_NOTIFICATION: ${{ inputs.test_notification }}
         run: |
           if [ "$TEST_NOTIFICATION" = "true" ]; then
-            python watcher.py --test
+            python -u watcher.py --test
           else
-            python watcher.py
+            python -u watcher.py
           fi
-      - name: Persist state
-        if: success() && inputs.test_notification != true
+      - name: Persist state even when check fails
+        # !cancelled() permits persistence even if a previous step failed.
+        if: ${{ !cancelled() && inputs.test_notification != true }}
         run: |
+          if [ ! -f watcher_state.json ]; then
+            echo 'No state file found; nothing to persist.'
+            exit 0
+          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add watcher_state.json
