@@ -19,6 +19,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
+from urllib.parse import urlparse, urljoin
+from urllib.request import Request, urlopen, build_opener, HTTPRedirectHandler
 
 URL = 'https://voyage.benin.bj/'
 STATE_FILE = Path(__file__).with_name('watcher_state.json')
@@ -33,6 +35,15 @@ BOOKING = (
     'choisir un vol', 'voir les disponibilités', 'book now',
     'acheter un billet', 'procéder à la réservation',
 )
+
+
+class PageText(str):
+    """Texte visible avec empreinte du HTML brut."""
+
+    def __new__(cls, text, raw_html):
+        obj = super().__new__(cls, text)
+        obj.raw_signature = hashlib.sha256(raw_html).hexdigest()
+        return obj
 
 
 class VisibleText(HTMLParser):
@@ -59,11 +70,43 @@ def normalize(text):
 
 
 def classify(text):
+    
+    if text.startswith('redirection detectee vers une nouvelle page'):
+        return 'redirect_detected'
+
     if any(term in text for term in BOOKING):
         return 'booking_possible'
     if any(term in text for term in WAITING):
         return 'waiting'
     return 'changed_unknown'
+
+
+def detect_redirect(original_url, final_url):
+    """Détecte un changement de destination HTTP."""
+
+    original = urlparse(original_url)
+    final = urlparse(final_url)
+
+    if final.scheme not in ('http', 'https'):
+        raise ValueError('Protocole de redirection invalide')
+
+    if not final.hostname:
+        raise ValueError('Destination de redirection invalide')
+
+    if final_url.rstrip('/') == original_url.rstrip('/'):
+        return None
+
+    return {
+        'detected': True,
+        'external': final.hostname != original.hostname,
+        'destination': final_url,
+    }
+
+class NoAutoRedirect(HTTPRedirectHandler):
+    """Ne suit pas automatiquement les redirections HTTP."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 def fetch_text():
@@ -75,9 +118,12 @@ def fetch_text():
             'Accept': 'text/html',
         },
     )
+    
+    opener = build_opener(NoAutoRedirect())
+
     for attempt in range(3):
         try:
-            with urlopen(request, timeout=15) as response:
+            with opener.open(request, timeout=15) as response:
                 final_host = urlparse(response.geturl()).hostname
                 if final_host != 'voyage.benin.bj':
                     raise ValueError('Redirection inattendue vers un autre domaine')
@@ -92,17 +138,58 @@ def fetch_text():
                 result = normalize(' '.join(parser.parts))
                 if len(result) < 30:
                     raise ValueError('Page trop courte ou vide')
-                return result
+                return PageText(result, raw)
+        
         except HTTPError as exc:
-            if exc.code not in TRANSIENT_HTTP or attempt == 2:
-                raise
-            print(f'[SITE] HTTP {exc.code}, nouvelle tentative {attempt + 2}/3', flush=True)
-        except (URLError, TimeoutError, OSError) as exc:
-            if attempt == 2:
-                raise
-            print(f'[SITE] Problème réseau ({type(exc).__name__}), nouvelle tentative {attempt + 2}/3', flush=True)
-        time.sleep((1, 3)[attempt])
-    raise RuntimeError('Échec inattendu de fetch_text')
+            try:
+                if exc.code in (301, 302, 303, 307, 308):
+                    location = exc.headers.get('Location')
+
+                    if not location:
+                        raise ValueError(
+                            'Redirection sans destination'
+                        )
+
+                    destination = urljoin(URL, location)
+                    parsed = urlparse(destination)
+
+                    if (
+                        parsed.scheme != 'https'
+                        or not parsed.hostname
+                        or parsed.username
+                        or parsed.password
+                    ):
+                        raise ValueError(
+                            'Destination de redirection invalide'
+                        )
+
+                    print(
+                        f'[SITE] Redirection HTTP {exc.code} detectee',
+                        flush=True
+                    )
+
+                    # Empreinte de la redirection elle-même.
+                    # On ne visite pas la destination.
+                    marker = (
+                        f'REDIRECT:{exc.code}:{destination}'
+                    ).encode('utf-8')
+
+                    return PageText(
+                        'redirection detectee vers une nouvelle page',
+                        marker
+                    )
+
+                if exc.code not in TRANSIENT_HTTP or attempt == 2:
+                    raise
+
+                print(
+                    f'[SITE] HTTP {exc.code}, '
+                    f'nouvelle tentative {attempt + 2}/3',
+                    flush=True
+                )
+            finally:
+                exc.close()
+
 
 
 def notify(title, message, priority='default'):
@@ -211,22 +298,76 @@ def check():
         return 1  # GitHub job must remain red if website check failed.
 
     status = classify(text)
-    signature = hashlib.sha256(text.encode()).hexdigest()
+    
+    signature = getattr(
+        text,
+        'raw_signature',
+        hashlib.sha256(text.encode()).hexdigest()
+    )
+
     previous_status = state.get('status')
     previous_signature = state.get('signature')
     changed = bool(previous_signature and previous_signature != signature)
 
-    if status == 'booking_possible' and (status != previous_status or changed):
-        enqueue(state, f'booking-{signature[:20]}', 'BENIN WATCH - VERIFIER LE SITE',
-                f'Indices de réservation détectés. Places NON confirmées ! {URL}', 'urgent')
-    elif status == 'changed_unknown' and (status != previous_status or changed):
-        enqueue(state, f'change-{signature[:20]}', 'BENIN WATCH - page modifiée',
-                f'La page a changé, ouverture NON confirmée. Vérifie : {URL}', 'high')
-    elif status == 'waiting' and changed:
-        enqueue(state, f'waiting-{signature[:20]}', 'BENIN WATCH - attente modifiée',
-                f'Le texte de la page d’attente a changé. Vérifie : {URL}', 'high')
-    elif status == 'waiting' and previous_status is None:
-        print('[SITE] Initialisation : page d’attente', flush=True)
+    
+    # Alerter pour chaque transition, y compris
+    # le retour à une ancienne version du HTML.
+    should_alert = (
+        (previous_status is None and status != 'waiting')
+        or changed
+        or (
+            previous_status is not None
+            and previous_status != status
+        )
+    )
+
+    if should_alert:
+        event_number = state.get('event_number', 0) + 1
+        state['event_number'] = event_number
+
+        
+        if status == 'redirect_detected':
+            category = 'redirect'
+            title = 'BENIN WATCH - REDIRECTION DETECTEE'
+            priority = 'urgent'
+            message = (
+                'Le site officiel redirige vers une autre adresse. '
+                'Verifie immediatement !'
+            )
+
+        elif status == 'booking_possible':
+            category = 'booking'
+            title = 'BENIN WATCH - VERIFIER LE SITE'
+            priority = 'urgent'
+            message = (
+                'Indices de reservation detectes. '
+                'Places NON confirmees !'
+            )
+
+        else:
+            category = 'change'
+            title = 'BENIN WATCH - CHANGEMENT DETECTE'
+            priority = 'high'
+            message = (
+                'Le site a change. '
+                'Ouverture NON confirmee.'
+            )
+
+
+        enqueue(
+            state,
+            f'{category}-{event_number}-{signature[:12]}',
+            title,
+            f'{message} Verifie : {URL}',
+            priority
+        )
+
+    elif previous_status is None:
+        print(
+            '[SITE] Initialisation : page d’attente',
+            flush=True
+        )
+
 
     if state.get('incident_open'):
         enqueue(state, f'recovery-{now.isoformat()}', 'BENIN WATCH - rétabli',

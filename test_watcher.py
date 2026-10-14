@@ -127,5 +127,219 @@ class Tests(unittest.TestCase):
             self.assertTrue(queue[0]['key'].startswith('booking-'))
 
 
+    def test_html_change_without_visible_text_change(self):
+        """Un changement HTML invisible doit déclencher une alerte."""
+
+        html_v1 = b'<main class="waiting">Bientot disponible</main>'
+        html_v2 = b'<main class="booking">Bientot disponible</main>'
+
+        page_v1 = watcher.PageText(
+            "bientot disponible", html_v1
+        )
+        page_v2 = watcher.PageText(
+            "bientot disponible", html_v2
+        )
+
+        # Le texte visible ne change pas.
+        self.assertEqual(str(page_v1), str(page_v2))
+
+        # Mais les empreintes HTML doivent être différentes.
+        self.assertNotEqual(
+            page_v1.raw_signature,
+            page_v2.raw_signature
+        )
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(
+                    watcher, 'STATE_FILE',
+                    Path(directory) / 'watcher_state.json'
+                ), \
+                patch.object(
+                    watcher, 'fetch_text',
+                    side_effect=[page_v1, page_v2]
+                ), \
+                patch.object(watcher, 'notify') as notification:
+
+            # Premier passage : initialisation.
+            self.assertEqual(watcher.check(), 0)
+
+            notification.reset_mock()
+
+            # Deuxième passage : seul le HTML a changé.
+            self.assertEqual(watcher.check(), 0)
+
+            # Le bot doit obligatoirement envoyer une alerte.
+            self.assertEqual(notification.call_count, 1)
+
+            self.assertEqual(
+                notification.call_args.args[2], 'high'
+            )
+
+
+    def test_repeated_changes_during_ntfy_outage(self):
+        """Chaque transition doit rester en attente si ntfy est indisponible."""
+
+        page_a = watcher.PageText(
+            "votre plateforme dédiée aux vols spéciaux vers le bénin sera bientôt disponible",
+            b"<html><body>Version A</body></html>"
+        )
+
+        page_b = watcher.PageText(
+            "votre plateforme dédiée aux vols spéciaux vers le bénin sera bientôt disponible",
+            b"<html><body>Version B</body></html>"
+        )
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(
+                 watcher, 'STATE_FILE',
+                 Path(directory) / 'watcher_state.json'
+             ), \
+             patch.object(
+                 watcher, 'fetch_text',
+                 side_effect=[page_a, page_b, page_a, page_b]
+             ), \
+             patch.object(
+                 watcher, 'notify',
+                 side_effect=RuntimeError("ntfy unavailable")
+             ):
+
+            # Quatre observations successives :
+            # A -> B -> A -> B
+            for _ in range(4):
+                self.assertEqual(watcher.check(), 1)
+
+            state = watcher.load_state()
+
+            changes = [
+                item for item in state['pending']
+                if item['key'].startswith('change-')
+            ]
+
+            # Trois transitions après l'état initial.
+            self.assertEqual(len(changes), 3)
+
+            # Chaque événement possède son propre identifiant.
+            keys = [item['key'] for item in changes]
+            self.assertEqual(len(keys), len(set(keys)))
+
+            self.assertEqual(state['event_number'], 3)
+            
+    def test_external_booking_redirect(self):
+        result = watcher.detect_redirect(
+            'https://voyage.benin.bj/',
+            'https://reservation.example.com/vols'
+        )
+
+        self.assertTrue(result['detected'])
+        self.assertTrue(result['external'])
+        self.assertEqual(
+            result['destination'],
+            'https://reservation.example.com/vols'
+        )
+
+        self.assertIsNone(
+            watcher.detect_redirect(
+                'https://voyage.benin.bj/',
+                'https://voyage.benin.bj/'
+            )
+        )
+        
+    def test_real_http_302_redirect(self):
+        """Une redirection HTTP 302 doit être détectée sans être suivie."""
+
+        from urllib.error import HTTPError
+        from email.message import Message
+        from unittest.mock import MagicMock
+
+        destination = "https://reservation.example.com/vols"
+
+        headers = Message()
+        headers["Location"] = destination
+
+        error = HTTPError(
+            watcher.URL,
+            302,
+            "Found",
+            headers,
+            None
+        )
+
+        fake_opener = MagicMock()
+        fake_opener.open.side_effect = error
+
+        with patch.object(
+            watcher,
+            "build_opener",
+            return_value=fake_opener
+        ):
+            result = watcher.fetch_text()
+
+        self.assertIsInstance(result, watcher.PageText)
+
+        self.assertIn(
+            "redirection detectee",
+            str(result)
+        )
+
+        self.assertTrue(result.raw_signature)
+
+        # Le bot ne doit jamais visiter automatiquement
+        # la nouvelle destination.
+        self.assertEqual(fake_opener.open.call_count, 1)
+
+        requested_url = fake_opener.open.call_args.args[0].full_url
+        self.assertEqual(requested_url, watcher.URL)
+
+        error.close()
+        
+    def test_redirect_triggers_urgent_notification(self):
+        """Une redirection doit déclencher une alerte urgente,
+        même lors de la première vérification.
+        """
+
+        redirect_page = watcher.PageText(
+            "redirection detectee vers une nouvelle page",
+            b"REDIRECT:302:https://reservation.example.com/vols"
+        )
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(
+                 watcher, 'STATE_FILE',
+                 Path(directory) / 'watcher_state.json'
+             ), \
+             patch.object(
+                 watcher, 'fetch_text',
+                 return_value=redirect_page
+             ), \
+             patch.object(watcher, 'notify') as notification:
+
+            # Le robot démarre directement sur une redirection.
+            self.assertEqual(watcher.check(), 0)
+
+            self.assertEqual(
+                notification.call_count, 2
+            )
+
+            # L'alerte urgente doit partir avant le rapport quotidien.
+            first_call = notification.call_args_list[0]
+
+            self.assertEqual(
+                first_call.args[2],
+                'urgent'
+            )
+
+            self.assertIn(
+                'REDIRECTION',
+                first_call.args[0]
+            )
+
+            # La file doit être vide après les envois réussis.
+            state = watcher.load_state()
+            self.assertEqual(state['pending'], [])
+            self.assertEqual(state['status'], 'redirect_detected')
+
+
+
+
 if __name__ == '__main__':
     unittest.main()
