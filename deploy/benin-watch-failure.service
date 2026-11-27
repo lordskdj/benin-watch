@@ -1,0 +1,51 @@
+# Triggered by OnFailure= of benin-watch.service (timeout kill, signal, crash).
+# Sends one rate-limited urgent "WATCHER ERROR" and pings the dead-man switch /fail.
+[Unit]
+Description=Benin Watch - alert when the watcher unit fails
+Documentation=file:///opt/benin-watch/DEPLOY.md
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+User=benin-watch
+Group=benin-watch
+WorkingDirectory=/opt/benin-watch
+ExecStart=/usr/bin/python3 -E -s -B /opt/benin-watch/watcher.py --report-failure
+Environment=BW_STATE_DIR=/var/lib/benin-watch
+Environment=BW_INSTANCE=VPS
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/benin-watch/benin-watch.env
+TimeoutStartSec=60
+StateDirectory=benin-watch
+StateDirectoryMode=0700
+UMask=0077
+SyslogIdentifier=benin-watch-failure
+MemoryMax=256M
+TasksMax=32
+
+# Same hardening as benin-watch.service.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM

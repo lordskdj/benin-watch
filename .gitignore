@@ -1,5 +1,21 @@
 __pycache__/
 *.pyc
 *.tmp
-.env
 .venv/
+
+# Secrets: never commit real values (examples end in .example)
+.env
+.env.*
+!*.example
+.dev.vars
+.dev.vars.*
+
+# Runtime files written next to the script (state backups, throttle, quarantine)
+watcher_state.json.bak
+watcher.lock
+self_alert.json
+*.corrupt-*
+
+# Cloudflare Worker (canary/) local tooling
+.wrangler/
+node_modules/

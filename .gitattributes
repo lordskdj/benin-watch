@@ -1,0 +1,3 @@
+# Store and check out text files with LF, even on Windows (core.autocrlf=true):
+# systemd units and shell-parsed files break with CRLF on the Ubuntu runner/VPS.
+* text=auto eol=lf
