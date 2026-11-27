@@ -1,0 +1,9 @@
+{
+  "name": "benin-watch-canary",
+  "private": true,
+  "type": "module",
+  "description": "Benin Watch canary (Cloudflare Worker). No runtime dependency.",
+  "scripts": {
+    "test": "node --test worker.test.js"
+  }
+}

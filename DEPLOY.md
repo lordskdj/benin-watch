@@ -53,15 +53,71 @@ Un ping « succès » signifie « le watcher a terminé et peut livrer ses alert
 
 ## 4. Canari Cloudflare (surveillance principale)
 
-> Les fichiers `canary/` sont en préparation. Cette section sera complétée avec eux.
+Fichiers : `canary/worker.js` (le Worker, sans dépendance), `canary/wrangler.toml` (configuration, **sans secret**), `canary/worker.test.js` (tests), `canary/package.json`.
 
-Principe : un Worker sans dépendance, déclenché par un Cron Trigger (`* * * * *`), sans route HTTP publique. Il demande la page avec `If-None-Match` / `If-Modified-Since`, ne suit pas les redirections, compare une empreinte SHA-256, alerte ntfy, puis envoie son ping healthchecks. L'état minimal est dans Workers KV et n'est écrit **qu'après** la livraison de l'alerte.
+### Ce que fait le canari, chaque minute
 
-Prévu :
+1. Prend un « bail » auprès de son Durable Object (évite deux exécutions simultanées) et lit l'état précédent.
+2. Demande `https://www.voyage.benin.bj/` **sans suivre les redirections**, avec `If-None-Match` / `If-Modified-Since` (une requête complète est forcée au moins toutes les 30 min). Un échec réseau ou un 408/425/429/5xx est réessayé une fois.
+3. Décide :
+   - `304` : rien n'a changé ;
+   - `200` : empreinte SHA-256 du HTML brut ; alerte **urgente** si elle diffère (même un changement invisible à l'écran) ;
+   - `3xx` : alerte **urgente** avec l'hôte de destination affiché (même hôte / AUTRE HÔTE) ; la destination n'est jamais visitée ;
+   - autre statut (403, 404…) : alerte **urgente** « anomalie HTTP » ;
+   - réponse de plus de 2 Mo (vérifiée sur `Content-Length` et pendant la lecture, jamais lue au-delà) : alerte **urgente** « PAGE TROP VOLUMINEUSE », une fois par épisode ; ce n'est pas une panne, et le dernier état valide est conservé ;
+   - site injoignable : une alerte (priorité haute) après 3 min de panne, puis « site rétabli ».
+4. Envoie l'alerte à ntfy (topic dans le corps JSON, jeton dans l'en-tête, jamais dans une URL).
+5. **Enregistre le nouvel état seulement si ntfy a accepté l'alerte.** Sinon : l'état n'est pas modifié (l'alerte repart à la minute suivante) et un ping `/fail` est envoyé à healthchecks.
+6. Envoie le ping healthchecks **succès** en dernier, une fois l'état enregistré. Un plantage n'envoie aucun ping : healthchecks détecte le silence.
 
-- Compte Cloudflare gratuit (aucun nom de domaine nécessaire), Node.js pour l'outil `wrangler`.
-- Secrets du Worker, ajoutés avec `npx wrangler secret put <NOM>` (jamais dans `wrangler.toml`) : `NTFY_TOPIC`, `NTFY_TOKEN` (optionnel), `HEALTHCHECK_URL`.
-- Limites du plan gratuit à respecter : 5 Cron Triggers par compte, 100 000 requêtes/jour, 1 000 écritures KV/jour (le canari n'écrit qu'aux changements d'état).
+Le canari **ne gère pas** les rappels, la file d'attente, le rapport quotidien ni aucun réseau social : c'est le rôle du watcher Python.
+Anti-spam : au plus 3 alertes de même nature par 30 min (une page qui changerait à chaque requête) ; les 3 premiers changements sont toujours notifiés, les suivants sont comptés et signalés dans l'alerte suivante.
+
+### État
+
+Un **Durable Object** unique (`CanaryState`, stockage SQLite, disponible sur le plan gratuit) contient une seule clé `state` : dernière empreinte observée, `ETag`/`Last-Modified`, début de panne, horodatages des dernières alertes. Lecture et écriture sont **fortement cohérentes** : la minute suivante relit toujours ce qui vient d'être écrit, donc pas de double alerte. Workers KV n'a pas été retenu : une valeur peut y rester périmée jusqu'à ~60 s.
+
+### Tests
+
+```bash
+cd canary
+node --test worker.test.js
+```
+
+Aucune dépendance, aucun appel réseau réel (tout est simulé). Les tests tournent aussi dans `tests.yml`.
+
+### Déploiement (manuel, depuis le PC)
+
+Prérequis : compte Cloudflare gratuit (aucun nom de domaine nécessaire), Node.js ≥ 20, et le check healthchecks « Canari » (section 2).
+
+```bash
+cd canary
+npx wrangler@4 login                          # ouvre le navigateur
+npx wrangler@4 deploy                         # crée le Worker, le Cron Trigger et le Durable Object
+npx wrangler@4 secret put NTFY_TOPIC          # la valeur est saisie au clavier, jamais en argument
+npx wrangler@4 secret put HEALTHCHECK_URL
+npx wrangler@4 secret put NTFY_TOKEN          # seulement si le topic est protégé
+```
+
+Entre `deploy` et le premier `secret put`, les exécutions échouent proprement (`NTFY_TOPIC manquant`, sans ping healthchecks) : c'est attendu. Chaque `secret put` active immédiatement une nouvelle version.
+
+Vérification :
+
+1. Dans la minute, une notification **« BENIN WATCH CF - canari demarre »** doit arriver (elle prouve toute la chaîne).
+2. `npx wrangler@4 tail` affiche les logs en direct (lignes `[CANARY] Observation : same …` ; aucun secret n'y figure).
+3. Le check healthchecks « Canari » passe au vert et reçoit un ping par minute.
+
+Arrêt d'urgence : `npx wrangler@4 delete` (ou désactiver le Cron Trigger dans le tableau de bord).
+
+### Limites du plan gratuit
+
+| Ressource | Limite gratuite | Consommation du canari |
+|---|---|---|
+| Cron Triggers | 5 par compte | 1 |
+| Requêtes Workers | 100 000 / jour | ~1 440 / jour |
+| Sous-requêtes par exécution | 50 | 8 au maximum (site ×2, ntfy ×2, healthcheck, état ×3) |
+| Temps CPU par exécution | 10 ms (l'attente réseau ne compte pas) | empreinte d'une page de ~2 Ko |
+| Durable Objects | plan gratuit, stockage SQLite | ~2 880 requêtes / jour, quelques écritures |
 
 ## 5. Avant de rendre le dépôt public
 

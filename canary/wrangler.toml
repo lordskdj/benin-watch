@@ -1,0 +1,28 @@
+# Benin Watch canary (Cloudflare Worker). Deploy: see ../DEPLOY.md, section 4.
+# NO SECRET IN THIS FILE. Secrets are added with `npx wrangler secret put <NAME>`:
+#   NTFY_TOPIC        (required)  exact ntfy topic name
+#   NTFY_TOKEN        (optional)  ntfy access token if the topic is protected
+#   HEALTHCHECK_URL   (recommended) healthchecks.io ping URL of the "canary" check
+name = "benin-watch-canary"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+
+# Cron only: no public HTTP route, no *.workers.dev URL, no preview URL.
+workers_dev = false
+preview_urls = false
+
+[triggers]
+crons = ["* * * * *"] # every minute (1 of the 5 Cron Triggers of the free plan)
+
+# State: ONE strongly consistent Durable Object (SQLite backend, available on the free plan).
+[[durable_objects.bindings]]
+name = "CANARY_STATE"
+class_name = "CanaryState"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["CanaryState"]
+
+# Logs of the Worker (already redacted by the code) in the Cloudflare dashboard.
+[observability]
+enabled = true

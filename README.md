@@ -21,9 +21,9 @@ Surveille la page **https://www.voyage.benin.bj/** (plateforme des vols spéciau
 ```
 
 - **Deux chemins indépendants** : hébergeur, langage et déclencheur différents. Une panne de GitHub n'arrête pas le canari, et inversement.
-- **Le canari Cloudflare** (`canary/`, en préparation) vérifie la page environ toutes les minutes avec des requêtes conditionnelles (`ETag` / `If-None-Match`). Il est volontairement minimal : il ne classe rien, il alerte sur tout changement, toute redirection ou toute panne prolongée.
+- **Le canari Cloudflare** (`canary/`) vérifie la page environ toutes les minutes avec des requêtes conditionnelles (`ETag` / `If-None-Match`). Il est volontairement minimal : il ne classe rien, il alerte sur tout changement, toute redirection, tout statut HTTP inattendu ou toute panne prolongée. Son état tient dans un Durable Object (cohérence forte : pas de double alerte).
 - **Le watcher Python** (`watcher.py` + `benin_watch/`) tourne sur GitHub Actions. Il classe la page, garde une file de notifications persistante (rien n'est retiré avant que ntfy l'ait acceptée), envoie des rappels et un rapport quotidien.
-- **ntfy** livre les notifications. Le titre indique la source : `BENIN WATCH GH` pour GitHub (le canari aura son propre préfixe).
+- **ntfy** livre les notifications. Le titre indique la source : `BENIN WATCH CF` pour le canari Cloudflare, `BENIN WATCH GH` pour GitHub. Un même changement peut donc être notifié deux fois (une par chemin) : c'est voulu.
 - **healthchecks.io** sert de « dead-man switch » : chaque chemin envoie un signal à chaque exécution ; si les signaux s'arrêtent, healthchecks prévient par son propre canal (e-mail…). Bénin Watch ne peut donc pas mourir en silence.
 
 Fréquence actuelle de GitHub Actions : toutes les **30 minutes** (filet de sécurité). Les horaires `schedule` de GitHub sont « au mieux » : des retards ou des exécutions sautées sont possibles. C'est pourquoi la détection rapide repose sur le canari.
@@ -75,6 +75,8 @@ Toute valeur secrète est masquée dans les logs (`benin_watch/log.py`).
 ```bash
 python -m unittest discover -v -p "test_*.py"
 ```
+
+Canari : `cd canary && node --test worker.test.js` (Node.js ≥ 20, aucune dépendance).
 
 Aucune dépendance externe sous Linux (Python 3.12). Sous Windows, installer d'abord `tzdata` : `python -m pip install --require-hashes -r requirements.txt`.
 Les messages `HTTP 502` ou `403` visibles pendant les tests sont **simulés**. Un test est ignoré sous Windows (permissions POSIX).
