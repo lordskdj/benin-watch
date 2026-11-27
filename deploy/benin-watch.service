@@ -2,7 +2,7 @@
 # Install: see DEPLOY.md. Code: /opt/benin-watch (root-owned, read-only for the service).
 # State: /var/lib/benin-watch (created by systemd, mode 0700, owned by benin-watch).
 [Unit]
-Description=Benin Watch - one availability check of voyage.benin.bj
+Description=Benin Watch - one availability check of www.voyage.benin.bj
 Documentation=file:///opt/benin-watch/DEPLOY.md
 Wants=network-online.target
 After=network-online.target

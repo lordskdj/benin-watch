@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bénin Watch V2: supervised availability-change detection for voyage.benin.bj.
+"""Bénin Watch V2: supervised availability-change detection for www.voyage.benin.bj.
 
 This is a notifier, not a booking bot. A changed page is NOT confirmed availability.
 """
@@ -27,7 +27,9 @@ from benin_watch import config, health, lock, notify_queue, retry, selfalert, st
 from benin_watch.log import log
 from benin_watch.retry import TRANSIENT_HTTP, Deadline, RetryPolicy
 
-URL = 'https://voyage.benin.bj/'
+# Canonical URL: the "www" host is the reference. Never replace it silently by the bare
+# domain: a redirect between the two is an observation (alert), not something to follow.
+URL = 'https://www.voyage.benin.bj/'
 # Operational state lives outside the code on the VPS (BW_STATE_DIR=/var/lib/benin-watch).
 # Default: next to this script, which keeps the GitHub Actions behaviour unchanged.
 STATE_FILE = Path(os.environ.get('BW_STATE_DIR') or Path(__file__).parent) / 'watcher_state.json'
@@ -550,7 +552,7 @@ def report_unit_failure():
 
 
 def parse_args(argv):
-    parser = argparse.ArgumentParser(description='Benin Watch: surveillance de voyage.benin.bj')
+    parser = argparse.ArgumentParser(description='Benin Watch: surveillance de www.voyage.benin.bj')
     group = parser.add_mutually_exclusive_group()
     group.add_argument('--test', action='store_true', help='Envoie seulement une notification ntfy de test')
     group.add_argument('--ack', action='store_true', help='Acquitte l alerte en cours : arrête les rappels')

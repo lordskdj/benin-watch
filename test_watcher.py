@@ -229,7 +229,7 @@ class Tests(unittest.TestCase):
             
     def test_external_booking_redirect(self):
         result = watcher.detect_redirect(
-            'https://voyage.benin.bj/',
+            'https://www.voyage.benin.bj/',
             'https://reservation.example.com/vols'
         )
 
@@ -242,10 +242,20 @@ class Tests(unittest.TestCase):
 
         self.assertIsNone(
             watcher.detect_redirect(
-                'https://voyage.benin.bj/',
-                'https://voyage.benin.bj/'
+                'https://www.voyage.benin.bj/',
+                'https://www.voyage.benin.bj/'
             )
         )
+
+    def test_canonical_url_is_www(self):
+        self.assertEqual(watcher.URL, 'https://www.voyage.benin.bj/')
+
+    def test_www_to_bare_domain_redirect_is_reported(self):
+        """A redirect www -> bare domain must be reported, never treated as 'same page'."""
+        result = watcher.detect_redirect(watcher.URL, 'https://voyage.benin.bj/')
+        self.assertTrue(result['detected'])
+        self.assertTrue(result['external'])
+        self.assertEqual(result['destination'], 'https://voyage.benin.bj/')
         
     def test_real_http_302_redirect(self):
         """Une redirection HTTP 302 doit être détectée sans être suivie."""
