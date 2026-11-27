@@ -1,6 +1,8 @@
-name: Benin Watch V2 (secondary watcher)
-# Secondary, independent watcher. The primary one runs on the VPS (systemd timer, every 2 min).
+name: Benin Watch V2 (full watcher)
+# Full Python watcher (classification, queue, reminders, daily report). It is the SECONDARY path:
+# fast detection comes from the independent Cloudflare canary (canary/, every ~1 min).
 # GitHub schedules are best effort (delays/skips happen): never rely on this alone.
+# Every 30 min while the repository is private (free minutes); ~10 min once it is public.
 on:
   schedule:
     - cron: '7,37 * * * *'
@@ -21,7 +23,8 @@ jobs:
     timeout-minutes: 5
     env:
       BW_INSTANCE: GH
-      BW_REMINDER_MINUTES: 'off'  # reminders come from the VPS; avoid duplicate reminder streams
+      # No BW_REMINDER_MINUTES: default reminders (5,15,30,60 min) are sent from here, the only
+      # full watcher. They are delivered at the next run, so their timing follows the schedule.
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
