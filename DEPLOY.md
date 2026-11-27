@@ -27,7 +27,18 @@ Créer **deux** checks distincts (un par chemin), avec une intégration (e-mail�
 
 Les retards des horaires GitHub justifient une grâce large. Après passage du dépôt en public et du workflow à ~10 min : période 10 min, grâce 30 min.
 
-Un ping « succès » signifie « le watcher a terminé et peut livrer ses alertes », **pas** « le site a été vérifié avec succès ». Un ping `/fail` est envoyé si une alerte ne peut pas être livrée ou en cas d'erreur fatale.
+Un ping « succès » signifie « le contrôle s'est terminé et les alertes peuvent être livrées », **pas** « le site a été vérifié avec succès » : un site en panne est signalé par ntfy, pas par healthchecks.
+
+Les deux chemins ne réagissent **pas** de la même façon aux erreurs :
+
+| Situation | Watcher Python (GitHub) | Canari Cloudflare |
+|---|---|---|
+| Contrôle terminé, alertes livrées (même si le site est en panne) | ping succès | ping succès |
+| ntfy refuse ou n'accepte pas une alerte | ping `/fail` (configuration ntfy refusée, ou alerte non livrée depuis plus de 10 min) | ping `/fail` immédiat ; l'état n'est pas enregistré et l'alerte repart à la minute suivante |
+| Erreur fatale (plantage, exception inattendue) | ping `/fail` + auto-alerte ntfy `WATCHER ERROR` | **aucun ping** (volontaire) : c'est l'absence de ping qui déclenche l'alerte healthchecks après le délai de grâce |
+| Configuration manquante (`NTFY_TOPIC` absent) | ping `/fail` dès qu'un message doit partir (au plus tard le rapport quotidien) : erreur de configuration ntfy | **aucun ping** (le canari s'arrête avant tout contrôle) |
+| Exécution ignorée (une autre est en cours) | aucun ping (code 75) | aucun ping |
+| Exécution jamais lancée (GitHub ou Cloudflare en panne, cron désactivé) | aucun ping | aucun ping |
 
 ## 3. GitHub Actions (surveillance secondaire)
 
@@ -71,7 +82,7 @@ Fichiers : `canary/worker.js` (le Worker, sans dépendance), `canary/wrangler.to
 6. Envoie le ping healthchecks **succès** en dernier, une fois l'état enregistré. Un plantage n'envoie aucun ping : healthchecks détecte le silence.
 
 Le canari **ne gère pas** les rappels, la file d'attente, le rapport quotidien ni aucun réseau social : c'est le rôle du watcher Python.
-Anti-spam : au plus 3 alertes de même nature par 30 min (une page qui changerait à chaque requête) ; les 3 premiers changements sont toujours notifiés, les suivants sont comptés et signalés dans l'alerte suivante.
+Anti-spam (une page qui changerait à chaque requête) : au plus 3 alertes de changement par 30 min. Les 3 premiers changements sont toujours notifiés. Un changement supprimé par ce quota n'est **jamais perdu** : le dernier état observé et le nombre de changements non notifiés sont mémorisés, et une alerte urgente `PAGE STABILISEE` est envoyée **dès que le quota a de nouveau de la place** (au plus tard ~30 min après), même si la page ne change plus, même pendant une panne du site. Cette alerte occupe elle-même une place du quota et n'est envoyée qu'une fois : pas de boucle. Si un nouveau changement arrive quand le quota est libre, son alerte signale directement le nombre de changements non notifiés.
 
 ### État
 

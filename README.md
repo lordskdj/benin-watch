@@ -30,6 +30,25 @@ Fréquence actuelle de GitHub Actions : toutes les **30 minutes** (filet de séc
 
 ## Alertes
 
+Le titre commence par `BENIN WATCH CF` (canari Cloudflare) ou `BENIN WATCH GH` (watcher Python sur GitHub).
+
+### Canari Cloudflare (`BENIN WATCH CF`)
+
+| Alerte | Signification | Priorité |
+|---|---|---|
+| `canari demarre` | Première observation réussie : prouve que toute la chaîne fonctionne (urgente si l'état initial n'est pas une page normale) | normale |
+| `PAGE MODIFIEE` | Le HTML de la page a changé, même de façon invisible à l'écran | urgente |
+| `REDIRECTION DETECTEE` | Le site redirige : **hôte de destination affiché**, avec « meme hote » ou « AUTRE HOTE ». La redirection n'est jamais suivie | urgente |
+| `ANOMALIE HTTP` | Statut HTTP inattendu et non temporaire (403, 404…) | urgente |
+| `PAGE TROP VOLUMINEUSE` | Réponse de plus de 2 Mo, non analysée ; une seule alerte par épisode | urgente |
+| `PAGE STABILISEE` | Anti-spam : des changements n'ont pas été notifiés (plus de 3 alertes en 30 min) ; dès que le quota le permet, le **dernier état observé** est notifié, même si la page ne bouge plus | urgente |
+| `SITE INJOIGNABLE` | Aucune réponse (réseau, délai, 5xx…) depuis 3 min ; une seule alerte par panne | haute |
+| `SITE RETABLI` | Le site répond de nouveau après une panne signalée | normale |
+
+Plusieurs événements d'une même minute sont regroupés dans une seule notification (avec la priorité la plus élevée).
+
+### Watcher Python sur GitHub (`BENIN WATCH GH`)
+
 | Alerte | Signification | Priorité |
 |---|---|---|
 | `VERIFIER LE SITE` | Mots de réservation détectés (« réserver maintenant », « rechercher un vol »…) | urgente |

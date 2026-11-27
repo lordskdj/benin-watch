@@ -191,8 +191,8 @@ function describe(obs) {
   return `HTTP ${obs.status}`;
 }
 
-function changeAlert(prev, obs, quietCount) {
-  const extra = quietCount ? ` (${quietCount} autre(s) changement(s) non notifie(s) depuis la derniere alerte : page instable)` : '';
+function changeAlert(prev, obs, deferredCount) {
+  const extra = deferredCount ? ` (${deferredCount} autre(s) changement(s) non notifie(s) depuis la derniere alerte : page instable)` : '';
   if (obs.kind === 'redirect') {
     return {
       title: 'BENIN WATCH CF - REDIRECTION DETECTEE', priority: 'urgent', tags: ['rotating_light'],
@@ -217,18 +217,46 @@ function merge(alerts) {
   return { ...top, message: alerts.map((a) => a.message).join('\n') };
 }
 
+function recentAlerts(state, now) {
+  return (state.alertTimes || []).filter((t) => now - Date.parse(t) < QUIET_WINDOW_MS);
+}
+
 /**
  * Pure state machine. Returns { state, dirty, alert }.
  * The caller saves `state` (if dirty) ONLY after `alert` (if any) was accepted by ntfy.
+ *
+ * Anti-spam never loses a change: a change suppressed by the quota is kept in `state.deferred`
+ * ({ count, firstAt, desc } of the LAST suppressed observation, which is also `state.sig`).
+ * It is notified ("PAGE STABILISEE") on the first run where the quota has room again, even if
+ * nothing changes any more, whatever the observation of that run (page, 304, outage...).
+ * That alert takes a quota slot and clears `deferred`: it cannot repeat every minute.
  */
 export function decide(prev, obs, now) {
   const state = {
     sig: null, family: null, etag: null, lastModified: null, fullAt: null,
-    failSince: null, failAlerted: false, alertTimes: [], quiet: 0, tooLarge: false, ...(prev || {}),
+    failSince: null, failAlerted: false, alertTimes: [], deferred: null, tooLarge: false, ...(prev || {}),
   };
   const nowIso = new Date(now).toISOString();
   const alerts = [];
   let dirty = false;
+
+  // Single exit point: flush a deferred change as soon as the quota allows it.
+  const done = () => {
+    const recent = recentAlerts(state, now);
+    if (state.deferred && recent.length < MAX_ALERTS_PER_WINDOW) {
+      const { count, firstAt, desc } = state.deferred;
+      const minutes = Math.max(0, Math.round((now - Date.parse(firstAt)) / 60000));
+      alerts.push({
+        title: 'BENIN WATCH CF - PAGE STABILISEE', priority: 'urgent', tags: ['rotating_light'],
+        message: `PAGE STABILISEE apres ${count} changement(s) non notifie(s) (anti-spam), le premier il y a `
+          + `${minutes} min. Dernier etat observe : ${desc}. Ouverture possible, NON confirmee : verifie immediatement !`,
+      });
+      state.alertTimes = [...recent, nowIso].slice(-MAX_ALERTS_PER_WINDOW);
+      state.deferred = null;
+      dirty = true;
+    }
+    return { state, dirty, alert: merge(alerts) };
+  };
 
   if (obs.kind === 'down') {
     if (!state.failSince) {
@@ -243,7 +271,7 @@ export function decide(prev, obs, now) {
       state.failAlerted = true;
       dirty = true;
     }
-    return { state, dirty, alert: merge(alerts) };
+    return done();
   }
 
   if (state.failSince) { // the site answered again
@@ -267,14 +295,14 @@ export function decide(prev, obs, now) {
       state.tooLarge = true;
       dirty = true;
     }
-    return { state, dirty, alert: merge(alerts) };
+    return done();
   }
   if (state.tooLarge) { // any normal answer ends the "too large" episode
     state.tooLarge = false;
     dirty = true;
   }
 
-  if (obs.kind === 'same') return { state, dirty, alert: merge(alerts) }; // 304: never a change
+  if (obs.kind === 'same') return done(); // 304: never a change
 
   if (obs.kind === 'page') {
     if (obs.full) { state.fullAt = nowIso; dirty = true; }
@@ -296,25 +324,31 @@ export function decide(prev, obs, now) {
       title: 'BENIN WATCH CF - canari demarre', priority: obs.kind === 'page' ? 'default' : 'urgent', tags: ['eyes'],
       message: `Canari actif. Etat initial : ${describe(obs)}.`,
     });
-    return { state, dirty: true, alert: merge(alerts) };
+    dirty = true;
+    return done();
   }
 
   if (obs.sig !== state.sig) {
-    const recent = (state.alertTimes || []).filter((t) => now - Date.parse(t) < QUIET_WINDOW_MS);
+    const recent = recentAlerts(state, now);
     const quiet = obs.family === state.family && recent.length >= MAX_ALERTS_PER_WINDOW;
     if (quiet) {
-      state.quiet += 1; // recorded, reported with the next alert
+      // Suppressed, NOT forgotten: remember the latest state, notified by done() later.
+      state.deferred = {
+        count: (state.deferred?.count || 0) + 1,
+        firstAt: state.deferred?.firstAt || nowIso,
+        desc: describe(obs),
+      };
       state.alertTimes = recent;
     } else {
-      alerts.push(changeAlert(state, obs, state.quiet));
+      alerts.push(changeAlert(state, obs, state.deferred?.count || 0));
       state.alertTimes = [...recent, nowIso].slice(-MAX_ALERTS_PER_WINDOW);
-      state.quiet = 0;
+      state.deferred = null; // this alert describes the current state and reports the count
     }
     state.sig = obs.sig;
     state.family = obs.family;
     dirty = true;
   }
-  return { state, dirty, alert: merge(alerts) };
+  return done();
 }
 
 // ---------------------------------------------------------------- delivery

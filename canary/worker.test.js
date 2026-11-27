@@ -66,7 +66,7 @@ function setup({ env = ENV } = {}) {
     const fetchFn = async (url, init = {}) => {
       calls.push({ url: String(url), init, now });
       if (url === URL_CANONICAL) {
-        const next = site.shift();
+        const next = typeof site === 'function' ? site(init) : site.shift(); // function = live server
         if (next === undefined) throw new Error('no site response scripted');
         if (next instanceof Error) throw next;
         return next;
@@ -185,6 +185,127 @@ test('a page changing on every request is capped (3 alerts / 30 min), the count 
   assert.equal(alerts, 3); // the first 3 changes are always alerted
   const later = await t.run(T0 + 40 * MIN, { site: [page(`${PAGE}<!-- 7 -->`, {})] });
   assert.match(t.ntfyCalls(later.calls)[0].message, /3 autre\(s\) changement\(s\) non notifie/);
+});
+
+// ------------------------------------------------------------------ anti-spam never loses a change
+
+/** A realistic server: answers 304 to a matching If-None-Match, else the current page. */
+function server(initialBody, initialEtag) {
+  const current = { body: initialBody, etag: initialEtag };
+  const respond = (init) => (init.headers['If-None-Match'] === current.etag
+    ? status(304)
+    : page(current.body, { etag: current.etag }));
+  respond.publish = (body, etag) => { current.body = body; current.etag = etag; };
+  return respond;
+}
+
+async function sha12(text) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 12);
+}
+
+test('3 changes -> real opening (suppressed) -> stable site -> deferred alert exactly once', async () => {
+  const t = setup();
+  const site = server(PAGE, '"v1"');
+  await t.run(T0, { site });
+  const OPENING = PAGE.replace('bientot disponible', 'RESERVEZ VOTRE VOL MAINTENANT');
+  const timeline = []; // [minute, title]
+  const at = async (minute) => {
+    const { calls } = await t.run(T0 + minute * MIN, { site });
+    for (const msg of t.ntfyCalls(calls)) timeline.push([minute, msg.title, msg.message]);
+  };
+  for (const [minute, body, etag] of [[1, `${PAGE}<!-- m1 -->`, '"v2"'], [2, `${PAGE}<!-- m2 -->`, '"v3"'],
+    [3, `${PAGE}<!-- m3 -->`, '"v4"'], [4, OPENING, '"open"']]) {
+    site.publish(body, etag);
+    await at(minute);
+  }
+  // The opening was suppressed by the quota, but it IS the remembered state.
+  assert.equal(timeline.length, 3);
+  assert.equal(t.saved().sig.slice(5, 17), await sha12(OPENING));
+  assert.equal(t.saved().deferred.count, 1);
+  // The site then stays stable (304, plus a full GET every 30 min) for 3 hours.
+  for (let minute = 5; minute <= 180; minute += 1) await at(minute);
+  const deferred = timeline.filter(([, title]) => /PAGE STABILISEE/.test(title));
+  assert.equal(deferred.length, 1); // notified exactly once: no loop
+  const [[minute, , message]] = deferred;
+  assert.equal(minute, 31); // first run where the quota (3 alerts / 30 min) has room again
+  assert.match(message, /apres 1 changement\(s\) non notifie\(s\)/);
+  assert.ok(message.includes(await sha12(OPENING)), 'the deferred alert describes the opening page');
+  assert.equal(timeline.length, 4); // and nothing else in 3 hours
+  assert.equal(t.saved().deferred, null);
+});
+
+test('deferred alert keeps the LAST suppressed state and the number of suppressed changes', async () => {
+  const t = setup();
+  await baseline(t, PAGE, {});
+  for (let i = 1; i <= 3; i += 1) await t.run(T0 + i * MIN, { site: [page(`${PAGE}<!-- ${i} -->`, {})] });
+  const LAST = `${PAGE}<!-- final -->`;
+  await t.run(T0 + 4 * MIN, { site: [page(`${PAGE}<!-- x -->`, {})] }); // suppressed
+  await t.run(T0 + 5 * MIN, { site: [page(LAST, {})] }); // suppressed
+  const { calls } = await t.run(T0 + 31 * MIN, { site: [page(LAST, {})] });
+  const [msg] = t.ntfyCalls(calls);
+  assert.match(msg.title, /PAGE STABILISEE/);
+  assert.equal(msg.priority, 5);
+  assert.match(msg.message, /apres 2 changement\(s\) non notifie\(s\).*le premier il y a 27 min/);
+  assert.ok(msg.message.includes(await sha12(LAST)));
+});
+
+test('deferred alert is sent even if the site went down meanwhile', async () => {
+  const t = setup();
+  await baseline(t, PAGE, {});
+  for (let i = 1; i <= 4; i += 1) await t.run(T0 + i * MIN, { site: [page(`${PAGE}<!-- ${i} -->`, {})] });
+  assert.equal(t.saved().deferred.count, 1);
+  const down = [new TypeError('fetch failed'), new TypeError('fetch failed')];
+  for (let minute = 5; minute <= 30; minute += 1) await t.run(T0 + minute * MIN, { site: [...down] });
+  const { calls } = await t.run(T0 + 31 * MIN, { site: [...down] });
+  const titles = t.ntfyCalls(calls).map((m) => m.title);
+  assert.deepEqual(titles, ['BENIN WATCH CF - PAGE STABILISEE']);
+  assert.ok(t.saved().failSince); // still an outage: only the deferred change was flushed
+});
+
+test('deferred alert + ntfy failure: kept, /fail, re-sent once next minute, never again', async () => {
+  const t = setup();
+  await baseline(t, PAGE, {});
+  for (let i = 1; i <= 4; i += 1) await t.run(T0 + i * MIN, { site: [page(`${PAGE}<!-- ${i} -->`, {})] });
+  const stable = () => [page(`${PAGE}<!-- 4 -->`, {})];
+  const failed = await t.run(T0 + 31 * MIN, { site: stable(), ntfy: [503, 503] });
+  assert.equal(failed.result.outcome, 'delivery_failed');
+  assert.equal(t.saved().deferred.count, 1); // not lost, state not saved
+  assert.deepEqual(t.healthCalls(failed.calls), [`${HC}/fail`]);
+  const retried = await t.run(T0 + 32 * MIN, { site: stable() });
+  assert.match(t.ntfyCalls(retried.calls)[0].title, /PAGE STABILISEE/);
+  assert.equal(t.saved().deferred, null);
+  let more = 0;
+  for (let minute = 33; minute <= 120; minute += 1) {
+    more += t.ntfyCalls((await t.run(T0 + minute * MIN, { site: stable() })).calls).length;
+  }
+  assert.equal(more, 0);
+});
+
+test('the deferred alert uses a quota slot: the 3 alerts / 30 min cap still holds', async () => {
+  const t = setup();
+  await baseline(t, PAGE, {});
+  for (let i = 1; i <= 4; i += 1) await t.run(T0 + i * MIN, { site: [page(`${PAGE}<!-- ${i} -->`, {})] });
+  const flushed = await t.run(T0 + 31 * MIN, { site: [page(`${PAGE}<!-- 4 -->`, {})] }); // alerts: 2, 3, 31
+  assert.match(t.ntfyCalls(flushed.calls)[0].title, /PAGE STABILISEE/);
+  const HALF = MIN / 2;
+  const next = await t.run(T0 + 31 * MIN + HALF, { site: [page(`${PAGE}<!-- 5 -->`, {})] });
+  assert.equal(t.ntfyCalls(next.calls).length, 0); // quota full (2, 3, 31): deferred, not alerted
+  assert.equal(t.saved().deferred.count, 1);
+  const later = await t.run(T0 + 32 * MIN + HALF, { site: [page(`${PAGE}<!-- 5 -->`, {})] }); // minute 2 expired
+  assert.match(t.ntfyCalls(later.calls)[0].title, /PAGE STABILISEE/);
+});
+
+test('a new change when the quota is back reports the suppressed count itself (no extra alert)', async () => {
+  const t = setup();
+  await baseline(t, PAGE, {});
+  for (let i = 1; i <= 4; i += 1) await t.run(T0 + i * MIN, { site: [page(`${PAGE}<!-- ${i} -->`, {})] });
+  const { calls } = await t.run(T0 + 31 * MIN, { site: [page(`${PAGE}<!-- new -->`, {})] });
+  const msgs = t.ntfyCalls(calls);
+  assert.equal(msgs.length, 1);
+  assert.match(msgs[0].title, /PAGE MODIFIEE/);
+  assert.match(msgs[0].message, /1 autre\(s\) changement\(s\) non notifie/);
+  assert.equal(t.saved().deferred, null);
 });
 
 // ------------------------------------------------------------------ redirects
