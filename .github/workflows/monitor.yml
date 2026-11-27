@@ -2,10 +2,10 @@ name: Benin Watch V2 (full watcher)
 # Full Python watcher (classification, queue, reminders, daily report). It is the SECONDARY path:
 # fast detection comes from the independent Cloudflare canary (canary/, every ~1 min).
 # GitHub schedules are best effort (delays/skips happen): never rely on this alone.
-# Every 30 min while the repository is private (free minutes); ~10 min once it is public.
+# Every 10 min (public repository: free minutes), off the top of the hour (busiest for GitHub).
 on:
   schedule:
-    - cron: '7,37 * * * *'
+    - cron: '2-59/10 * * * *'
   workflow_dispatch:
     inputs:
       test_notification:

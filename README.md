@@ -26,7 +26,7 @@ Surveille la page **https://www.voyage.benin.bj/** (plateforme des vols spéciau
 - **ntfy** livre les notifications. Le titre indique la source : `BENIN WATCH CF` pour le canari Cloudflare, `BENIN WATCH GH` pour GitHub. Un même changement peut donc être notifié deux fois (une par chemin) : c'est voulu.
 - **healthchecks.io** sert de « dead-man switch » : chaque chemin envoie un signal à chaque exécution ; si les signaux s'arrêtent, healthchecks prévient par son propre canal (e-mail…). Bénin Watch ne peut donc pas mourir en silence.
 
-Fréquence actuelle de GitHub Actions : toutes les **30 minutes** (filet de sécurité). Les horaires `schedule` de GitHub sont « au mieux » : des retards ou des exécutions sautées sont possibles. C'est pourquoi la détection rapide repose sur le canari.
+Fréquence actuelle de GitHub Actions : toutes les **10 minutes** (filet de sécurité). Les horaires `schedule` de GitHub sont « au mieux » : des retards ou des exécutions sautées sont possibles. C'est pourquoi la détection rapide repose sur le canari.
 
 ## Alertes
 

@@ -23,9 +23,9 @@ Créer **deux** checks distincts (un par chemin), avec une intégration (e-mail�
 | Check | Période | Grâce | Utilisé par |
 |---|---|---|---|
 | Canari Cloudflare | 1 min | 5 min | secret du Worker |
-| GitHub Actions | 30 min | 60 min | secret GitHub `HEALTHCHECK_URL_GH` |
+| GitHub Actions | 10 min | 60 min | secret GitHub `HEALTHCHECK_URL_GH` |
 
-Les retards des horaires GitHub justifient une grâce large. Après passage du dépôt en public et du workflow à ~10 min : période 10 min, grâce 30 min.
+Les retards des horaires GitHub justifient une grâce large : en novembre 2026, le workflow réglé sur 30 min n'a parfois tourné que toutes les 8 à 10 heures. Commencer avec une grâce de 60 min, puis l'ajuster après quelques jours d'observation.
 
 Un ping « succès » signifie « le contrôle s'est terminé et les alertes peuvent être livrées », **pas** « le site a été vérifié avec succès » : un site en panne est signalé par ntfy, pas par healthchecks.
 
@@ -52,7 +52,7 @@ Les deux chemins ne réagissent **pas** de la même façon aux erreurs :
 
 ### Fonctionnement
 
-- `monitor.yml` se lance sur `schedule` (toutes les 30 min, ~10 min une fois le dépôt public) et manuellement (`workflow_dispatch`).
+- `monitor.yml` se lance sur `schedule` (toutes les 10 min, aux minutes 2, 12, 22…) et manuellement (`workflow_dispatch`).
 - L'état (`watcher_state.json`, sa sauvegarde, `self_alert.json`) est conservé dans le **cache Actions**, jamais poussé dans Git. Le workflow n'a que `contents: read`. En cas de cache vide, la version commitée de `watcher_state.json` sert de point de départ.
 - Un job **rouge** signifie : site inaccessible, ou alerte pas encore livrée (elle reste en file et repart au run suivant).
 - `tests.yml` lance la suite de tests sur chaque push et pull request. Il n'a accès à aucun secret.
@@ -139,7 +139,7 @@ Arrêt d'urgence : `npx wrangler@4 delete` (ou désactiver le Cron Trigger dans 
 - [ ] Settings → Code security : activer **Secret scanning** et **Push protection**.
 - [ ] Settings → Rules : règle sur `main` interdisant le force-push et la suppression.
 - [ ] Les logs des anciennes exécutions Actions deviennent publics (les secrets y sont masqués par GitHub) ; les supprimer si souhaité.
-- [ ] Après passage en public : filet de sécurité à ~10 min dans `monitor.yml`, et ajuster le check healthchecks GitHub.
+- [x] Après passage en public : filet de sécurité à 10 min dans `monitor.yml` (fait), check healthchecks GitHub à 10 min.
 
 À savoir : sur un dépôt public, GitHub **désactive les workflows `schedule` après 60 jours sans activité** du dépôt. Le check healthchecks « GitHub Actions » le signalerait ; il suffit alors de réactiver le workflow (ou de faire un commit).
 
