@@ -171,8 +171,11 @@ class Tests(unittest.TestCase):
             # Le bot doit obligatoirement envoyer une alerte.
             self.assertEqual(notification.call_count, 1)
 
+            # V2 : cette page ne contient PAS le texte d'attente (statut changed_unknown).
+            # Un changement d'une page inconnue est une ouverture possible -> urgent.
+            # Le cas "page d'attente toujours affichée" reste 'high' (test_detection.py).
             self.assertEqual(
-                notification.call_args.args[2], 'high'
+                notification.call_args.args[2], 'urgent'
             )
 
 

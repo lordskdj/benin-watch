@@ -1,1 +1,6 @@
-tzdata>=2026.1,<2027
+# Benin Watch has no third-party runtime dependency on Linux: zoneinfo reads the
+# system tz database (/usr/share/zoneinfo, package "tzdata" on Ubuntu).
+# Windows has no system tz database, so the PyPI "tzdata" package is required there.
+# Install with: python -m pip install --require-hashes -r requirements.txt
+tzdata==2026.6 ; sys_platform == "win32" \
+    --hash=sha256:0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec

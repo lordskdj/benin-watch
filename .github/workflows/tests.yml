@@ -1,0 +1,18 @@
+name: Tests
+# Kept out of the monitoring path: a failing test must never stop the watcher.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  unittest:
+    runs-on: ubuntu-24.04  # same Python (3.12) as the Ubuntu 24.04 VPS
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Run the whole suite
+        run: python3 -B -m unittest discover -v -p 'test_*.py'

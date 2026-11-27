@@ -1,0 +1,16 @@
+# Fires benin-watch.service every 2 minutes (+ 0-20 s random delay).
+# A oneshot unit still running is never started twice by the timer.
+# Persistent=true: a run missed while the VPS was off is executed right after boot.
+[Unit]
+Description=Run Benin Watch every 2 minutes
+Documentation=file:///opt/benin-watch/DEPLOY.md
+
+[Timer]
+OnCalendar=*-*-* *:00/2:00
+RandomizedDelaySec=20
+AccuracySec=1s
+Persistent=true
+Unit=benin-watch.service
+
+[Install]
+WantedBy=timers.target
